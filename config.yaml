@@ -1,0 +1,6 @@
+http_addr: ":8080"
+mysql_dsn: "chatroom:chatroom@tcp(127.0.0.1:3306)/chatroom?parseTime=true&charset=utf8mb4"
+redis_addr: "127.0.0.1:6379"
+redis_pass: ""
+jwt_secret: "dev-secret-change-me"
+jwt_ttl: 24h
