@@ -1,0 +1,219 @@
+package room
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"time"
+
+	"chatroom-server/internal/auth"
+)
+
+type Handler struct{ store Store }
+
+func NewHandler(store Store) *Handler { return &Handler{store: store} }
+
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/rooms/groups", h.createGroup)
+	mux.HandleFunc("POST /api/rooms/groups/{roomID}/members", h.addMember)
+	mux.HandleFunc("DELETE /api/rooms/groups/{roomID}/members/{uid}", h.removeMember)
+	mux.HandleFunc("DELETE /api/rooms/groups/{roomID}/members/me", h.exitGroup)
+	mux.HandleFunc("PUT /api/rooms/groups/{roomID}/admins/{uid}", h.setAdmin)
+	mux.HandleFunc("GET /api/rooms/groups/{roomID}/members", h.listMembers)
+}
+
+type createGroupRequest struct {
+	Name   string `json:"name"`
+	Avatar string `json:"avatar"`
+}
+
+func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UIDFromContext(r.Context())
+
+	var req createGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	roomID, err := h.store.CreateGroupRoom(ctx, uid, req.Name, req.Avatar)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create group")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"room_id": roomID})
+}
+
+type addMemberRequest struct {
+	UID int64 `json:"uid"`
+}
+
+func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
+	actorUID, _ := auth.UIDFromContext(r.Context())
+	groupID, err := strconv.ParseInt(r.PathValue("roomID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid roomID")
+		return
+	}
+
+	var req addMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UID == 0 {
+		writeError(w, http.StatusBadRequest, "uid is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	if _, err := h.store.GetMember(ctx, groupID, actorUID); err != nil {
+		writeError(w, http.StatusForbidden, "not a member of this group")
+		return
+	}
+
+	if err := h.store.AddMember(ctx, groupID, req.UID, RoleMember); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add member")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
+	actorUID, _ := auth.UIDFromContext(r.Context())
+	groupID, err := strconv.ParseInt(r.PathValue("roomID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid roomID")
+		return
+	}
+	targetUID, err := strconv.ParseInt(r.PathValue("uid"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid uid")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	actor, err := h.store.GetMember(ctx, groupID, actorUID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "not a member of this group")
+		return
+	}
+	target, err := h.store.GetMember(ctx, groupID, targetUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "target is not a member")
+		return
+	}
+	if !CanRemoveMember(actor.Role, target.Role) {
+		writeError(w, http.StatusForbidden, "not allowed to remove this member")
+		return
+	}
+
+	if err := h.store.RemoveMember(ctx, groupID, targetUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove member")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) exitGroup(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UIDFromContext(r.Context())
+	groupID, err := strconv.ParseInt(r.PathValue("roomID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid roomID")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	member, err := h.store.GetMember(ctx, groupID, uid)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "not a member of this group")
+		return
+	}
+	if member.Role == RoleOwner {
+		writeError(w, http.StatusForbidden, "owner must transfer ownership or dismiss the group instead of exiting")
+		return
+	}
+
+	if err := h.store.RemoveMember(ctx, groupID, uid); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to exit group")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+type setAdminRequest struct {
+	IsAdmin bool `json:"is_admin"`
+}
+
+func (h *Handler) setAdmin(w http.ResponseWriter, r *http.Request) {
+	actorUID, _ := auth.UIDFromContext(r.Context())
+	groupID, err := strconv.ParseInt(r.PathValue("roomID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid roomID")
+		return
+	}
+	targetUID, err := strconv.ParseInt(r.PathValue("uid"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid uid")
+		return
+	}
+
+	var req setAdminRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	actor, err := h.store.GetMember(ctx, groupID, actorUID)
+	if err != nil || !CanSetAdmin(actor.Role) {
+		writeError(w, http.StatusForbidden, "only the owner can set admins")
+		return
+	}
+
+	role := RoleMember
+	if req.IsAdmin {
+		role = RoleAdmin
+	}
+	if err := h.store.SetRole(ctx, groupID, targetUID, role); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
+	groupID, err := strconv.ParseInt(r.PathValue("roomID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid roomID")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	members, err := h.store.ListMembers(ctx, groupID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list members")
+		return
+	}
+	writeJSON(w, http.StatusOK, members)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]any{"code": status, "msg": msg})
+}
