@@ -36,6 +36,17 @@ services:
       timeout: 3s
       retries: 30
 
+  # --dev is for local/LAN testing only: fixed API key/secret below, no TLS,
+  # small UDP range. Production needs generated keys, TLS, and a real UDP
+  # range (or a TURN relay) reachable from the public internet.
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0 --udp-port 50000-50019 --keys "devkey: devsecretkeydevsecretkeydevsecretkeydevsecretkey"
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50019:50000-50019/udp"
+
   app:
     build: .
     depends_on:
@@ -53,6 +64,9 @@ services:
       CHATROOM_MINIO_ACCESS_KEY: "minioadmin"
       CHATROOM_MINIO_SECRET_KEY: "minioadmin"
       CHATROOM_MINIO_BUCKET: "chatroom-media"
+      CHATROOM_LIVEKIT_API_KEY: "devkey"
+      CHATROOM_LIVEKIT_API_SECRET: "devsecretkeydevsecretkeydevsecretkeydevsecretkey"
+      CHATROOM_LIVEKIT_PUBLIC_URL: "ws://localhost:7880"
     ports:
       - "8080:8080"
 

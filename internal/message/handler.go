@@ -9,6 +9,7 @@ import (
 
 	"chatroom-server/internal/auth"
 	"chatroom-server/internal/room"
+	"chatroom-server/internal/ws"
 )
 
 // Broadcaster pushes an already-serialized message payload to a set of uids
@@ -100,28 +101,13 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
-// canPost reports whether uid may send a message into rm. Hot rooms are
-// public discussion rooms by design, so any authenticated user may post;
-// ordinary groups require membership and 1:1 rooms require being one of the
-// two participants.
 func (h *Handler) canPost(ctx context.Context, rm room.Room, uid int64) bool {
-	if rm.IsHot() {
-		return true
-	}
-	if rm.IsGroup() {
-		_, err := h.rooms.GetMember(ctx, rm.ID, uid)
-		return err == nil
-	}
-	friend, err := h.rooms.GetFriendByRoomID(ctx, rm.ID)
-	if err != nil {
-		return false
-	}
-	return friend.UID1 == uid || friend.UID2 == uid
+	return room.IsParticipant(ctx, h.rooms, rm, uid)
 }
 
 func (h *Handler) broadcast(ctx context.Context, rm room.Room, msg *Message) {
-	payload, err := json.Marshal(msg)
-	if err != nil {
+	payload := ws.Marshal("chat_message", msg)
+	if payload == nil {
 		return
 	}
 	if rm.IsHot() {

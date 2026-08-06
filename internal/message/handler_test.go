@@ -298,10 +298,16 @@ func TestRecallOwnMessageWithinWindow(t *testing.T) {
 	if len(hub.sentTo[1]) != 1 {
 		t.Fatalf("expected the recall to be broadcast to room members, sentTo = %+v", hub.sentTo)
 	}
-	var broadcast Message
-	json.Unmarshal(hub.sentTo[1][0], &broadcast)
-	if broadcast.Status != StatusDeleted {
-		t.Errorf("broadcast message Status = %v, want StatusDeleted", broadcast.Status)
+	var envelope struct {
+		Kind    string  `json:"kind"`
+		Payload Message `json:"payload"`
+	}
+	json.Unmarshal(hub.sentTo[1][0], &envelope)
+	if envelope.Kind != "chat_message" {
+		t.Errorf("envelope Kind = %q, want chat_message", envelope.Kind)
+	}
+	if envelope.Payload.Status != StatusDeleted {
+		t.Errorf("broadcast message Status = %v, want StatusDeleted", envelope.Payload.Status)
 	}
 }
 
