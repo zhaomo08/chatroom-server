@@ -24,4 +24,8 @@ func TestConnectAndMigrate(t *testing.T) {
 	if err := conn.Ping(); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
+
+	if got := conn.Stats().MaxOpenConnections; got != 25 {
+		t.Errorf("MaxOpenConnections = %d, want 25 (unbounded default risks exhausting MySQL's max_connections)", got)
+	}
 }

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -89,8 +92,27 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 	mux := buildMux(cfg)
-	log.Printf("chatroom-server listening on %s", cfg.HTTPAddr)
-	if err := http.ListenAndServe(cfg.HTTPAddr, mux); err != nil {
-		log.Fatal(err)
+	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
+
+	// SIGTERM (docker stop / k8s pod eviction) should let in-flight HTTP
+	// requests and WebSocket connections finish instead of being killed
+	// mid-request the moment the process receives the signal.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("chatroom-server listening on %s", cfg.HTTPAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Print("shutting down, waiting for in-flight requests (max 10s)")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
 	}
 }

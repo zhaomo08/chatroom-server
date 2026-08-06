@@ -2,6 +2,7 @@ package db
 
 import (
 	"embed"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/mysql"
@@ -14,8 +15,20 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// Connect opens a pooled connection to dsn. The pool is bounded so a burst of
+// traffic can't open unlimited connections and exhaust MySQL's
+// max_connections; ConnMaxLifetime recycles connections periodically so a
+// restarted MySQL or an intermediate proxy dropping idle connections doesn't
+// surface as random query errors.
 func Connect(dsn string) (*sqlx.DB, error) {
-	return sqlx.Connect("mysql", dsn)
+	db, err := sqlx.Connect("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	return db, nil
 }
 
 // Migrate applies all up migrations embedded in the binary to the database at
