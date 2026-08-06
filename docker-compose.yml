@@ -41,7 +41,14 @@ services:
   # range (or a TURN relay) reachable from the public internet.
   livekit:
     image: livekit/livekit-server:latest
-    command: --dev --bind 0.0.0.0 --udp-port 50000-50019 --keys "devkey: devsecretkeydevsecretkeydevsecretkeydevsecretkey"
+    command:
+      - --dev
+      - --bind
+      - 0.0.0.0
+      - --udp-port
+      - 50000-50019
+      - --keys
+      - "devkey: devsecretkeydevsecretkeydevsecretkeydevsecretkey"
     ports:
       - "7880:7880"
       - "7881:7881"

@@ -9,30 +9,36 @@ import (
 )
 
 type Config struct {
-	HTTPAddr       string        `yaml:"http_addr"`
-	MySQLDSN       string        `yaml:"mysql_dsn"`
-	RedisAddr      string        `yaml:"redis_addr"`
-	RedisPass      string        `yaml:"redis_pass"`
-	JWTSecret      string        `yaml:"jwt_secret"`
-	JWTTTL         time.Duration `yaml:"jwt_ttl"`
-	MinioEndpoint  string        `yaml:"minio_endpoint"`
-	MinioAccessKey string        `yaml:"minio_access_key"`
-	MinioSecretKey string        `yaml:"minio_secret_key"`
-	MinioBucket    string        `yaml:"minio_bucket"`
-	MinioUseSSL    bool          `yaml:"minio_use_ssl"`
+	HTTPAddr         string        `yaml:"http_addr"`
+	MySQLDSN         string        `yaml:"mysql_dsn"`
+	RedisAddr        string        `yaml:"redis_addr"`
+	RedisPass        string        `yaml:"redis_pass"`
+	JWTSecret        string        `yaml:"jwt_secret"`
+	JWTTTL           time.Duration `yaml:"jwt_ttl"`
+	MinioEndpoint    string        `yaml:"minio_endpoint"`
+	MinioAccessKey   string        `yaml:"minio_access_key"`
+	MinioSecretKey   string        `yaml:"minio_secret_key"`
+	MinioBucket      string        `yaml:"minio_bucket"`
+	MinioUseSSL      bool          `yaml:"minio_use_ssl"`
+	LiveKitAPIKey    string        `yaml:"livekit_api_key"`
+	LiveKitAPISecret string        `yaml:"livekit_api_secret"`
+	LiveKitPublicURL string        `yaml:"livekit_public_url"`
 }
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
-		HTTPAddr:       ":8080",
-		MySQLDSN:       "root:root@tcp(127.0.0.1:3306)/chatroom?parseTime=true&charset=utf8mb4",
-		RedisAddr:      "127.0.0.1:6379",
-		JWTSecret:      "dev-secret-change-me",
-		JWTTTL:         24 * time.Hour,
-		MinioEndpoint:  "127.0.0.1:9000",
-		MinioAccessKey: "minioadmin",
-		MinioSecretKey: "minioadmin",
-		MinioBucket:    "chatroom-media",
+		HTTPAddr:         ":8080",
+		MySQLDSN:         "root:root@tcp(127.0.0.1:3306)/chatroom?parseTime=true&charset=utf8mb4",
+		RedisAddr:        "127.0.0.1:6379",
+		JWTSecret:        "dev-secret-change-me",
+		JWTTTL:           24 * time.Hour,
+		MinioEndpoint:    "127.0.0.1:9000",
+		MinioAccessKey:   "minioadmin",
+		MinioSecretKey:   "minioadmin",
+		MinioBucket:      "chatroom-media",
+		LiveKitAPIKey:    "devkey",
+		LiveKitAPISecret: "devsecretkeydevsecretkeydevsecretkeydevsecretkey",
+		LiveKitPublicURL: "ws://localhost:7880",
 	}
 	if path != "" {
 		data, err := os.ReadFile(path)
@@ -81,5 +87,14 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("CHATROOM_MINIO_USE_SSL"); v != "" {
 		cfg.MinioUseSSL = v == "true" || v == "1"
+	}
+	if v := os.Getenv("CHATROOM_LIVEKIT_API_KEY"); v != "" {
+		cfg.LiveKitAPIKey = v
+	}
+	if v := os.Getenv("CHATROOM_LIVEKIT_API_SECRET"); v != "" {
+		cfg.LiveKitAPISecret = v
+	}
+	if v := os.Getenv("CHATROOM_LIVEKIT_PUBLIC_URL"); v != "" {
+		cfg.LiveKitPublicURL = v
 	}
 }

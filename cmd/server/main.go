@@ -10,6 +10,7 @@ import (
 
 	"chatroom-server/internal/auth"
 	"chatroom-server/internal/cache"
+	"chatroom-server/internal/call"
 	"chatroom-server/internal/config"
 	"chatroom-server/internal/db"
 	"chatroom-server/internal/media"
@@ -54,6 +55,7 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	msgHandler := message.NewHandler(msgStore, roomStore, hub)
 	wsHandler := ws.NewHandler(hub, []byte(cfg.JWTSecret))
 	mediaHandler := media.NewHandler(mediaStore, []byte(cfg.JWTSecret))
+	callHandler := call.NewHandler(roomStore, hub, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret, cfg.LiveKitPublicURL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
@@ -68,12 +70,15 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	roomHandler.RegisterRoutes(protected)
 	msgHandler.RegisterRoutes(protected)
 	mediaHandler.RegisterRoutes(protected)
+	callHandler.RegisterRoutes(protected)
 	authMiddleware := auth.Middleware([]byte(cfg.JWTSecret))
 	mux.Handle("/api/rooms", authMiddleware(protected))
 	mux.Handle("/api/rooms/", authMiddleware(protected))
 	mux.Handle("/api/messages", authMiddleware(protected))
 	mux.Handle("/api/messages/", authMiddleware(protected))
 	mux.Handle("POST /api/media/upload", authMiddleware(protected))
+	mux.Handle("POST /api/calls/token", authMiddleware(protected))
+	mux.Handle("POST /api/calls/invite", authMiddleware(protected))
 
 	return mux
 }
