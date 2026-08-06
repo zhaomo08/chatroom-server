@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -19,14 +20,25 @@ type Broadcaster interface {
 	BroadcastAll(payload []byte)
 }
 
+// GroupMemberCache is a read-through cache for group membership, keyed by
+// group id. Implemented by internal/cache.MemberCache. Pass nil to always
+// hit the database (used by tests).
+type GroupMemberCache interface {
+	Get(ctx context.Context, groupID int64) ([]int64, bool, error)
+	Set(ctx context.Context, groupID int64, uids []int64, ttl time.Duration) error
+}
+
+const groupMemberCacheTTL = 5 * time.Minute
+
 type Handler struct {
 	messages Store
 	rooms    room.Store
 	hub      Broadcaster
+	cache    GroupMemberCache
 }
 
-func NewHandler(messages Store, rooms room.Store, hub Broadcaster) *Handler {
-	return &Handler{messages: messages, rooms: rooms, hub: hub}
+func NewHandler(messages Store, rooms room.Store, hub Broadcaster, cache GroupMemberCache) *Handler {
+	return &Handler{messages: messages, rooms: rooms, hub: hub, cache: cache}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -101,8 +113,53 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// canPost intentionally doesn't call room.IsParticipant: that helper
+// re-queries group_member on every call, and canPost + broadcast both need
+// the member list for the same request. groupMemberUIDs below fetches it
+// once (cached) and both call sites reuse it.
 func (h *Handler) canPost(ctx context.Context, rm room.Room, uid int64) bool {
-	return room.IsParticipant(ctx, h.rooms, rm, uid)
+	if rm.IsHot() {
+		return true
+	}
+	if rm.IsGroup() {
+		uids, err := h.groupMemberUIDs(ctx, rm.ID)
+		if err != nil {
+			return false
+		}
+		return slices.Contains(uids, uid)
+	}
+	friend, err := h.rooms.GetFriendByRoomID(ctx, rm.ID)
+	if err != nil {
+		return false
+	}
+	return friend.UID1 == uid || friend.UID2 == uid
+}
+
+// groupMemberUIDs returns every member uid of groupID, going through h.cache
+// first when configured. A single message send calls this from both
+// canPost and broadcast; the second call is a cache hit even within the
+// same request, so a group send does at most one group_member query
+// instead of two — and repeat sends in the same group do zero until the
+// cache entry expires or membership changes (see room.Handler's
+// invalidateCache).
+func (h *Handler) groupMemberUIDs(ctx context.Context, groupID int64) ([]int64, error) {
+	if h.cache != nil {
+		if uids, ok, err := h.cache.Get(ctx, groupID); err == nil && ok {
+			return uids, nil
+		}
+	}
+	members, err := h.rooms.ListMembers(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	uids := make([]int64, len(members))
+	for i, m := range members {
+		uids[i] = m.UID
+	}
+	if h.cache != nil {
+		_ = h.cache.Set(ctx, groupID, uids, groupMemberCacheTTL)
+	}
+	return uids, nil
 }
 
 func (h *Handler) broadcast(ctx context.Context, rm room.Room, msg *Message) {
@@ -116,13 +173,9 @@ func (h *Handler) broadcast(ctx context.Context, rm room.Room, msg *Message) {
 	}
 	var recipients []int64
 	if rm.IsGroup() {
-		members, err := h.rooms.ListMembers(ctx, rm.ID)
+		uids, err := h.groupMemberUIDs(ctx, rm.ID)
 		if err != nil {
 			return
-		}
-		uids := make([]int64, len(members))
-		for i, m := range members {
-			uids[i] = m.UID
 		}
 		recipients = room.Recipients(rm, uids, nil)
 	} else {

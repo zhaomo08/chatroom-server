@@ -10,9 +10,28 @@ import (
 	"chatroom-server/internal/auth"
 )
 
-type Handler struct{ store Store }
+// MemberCache is the write side of message.GroupMemberCache: room.Handler
+// invalidates a group's cached member list whenever membership actually
+// changes, so message.Handler's read-through cache doesn't serve a stale
+// list to a newly-added or just-removed member. Implemented by
+// internal/cache.MemberCache. Pass nil to disable (used by tests).
+type MemberCache interface {
+	Invalidate(ctx context.Context, groupID int64) error
+}
 
-func NewHandler(store Store) *Handler { return &Handler{store: store} }
+type Handler struct {
+	store Store
+	cache MemberCache
+}
+
+func NewHandler(store Store, cache MemberCache) *Handler { return &Handler{store: store, cache: cache} }
+
+func (h *Handler) invalidateCache(ctx context.Context, groupID int64) {
+	if h.cache == nil {
+		return
+	}
+	_ = h.cache.Invalidate(ctx, groupID)
+}
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/rooms", h.listRooms)
@@ -122,6 +141,7 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to add member")
 		return
 	}
+	h.invalidateCache(ctx, groupID)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -160,6 +180,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to remove member")
 		return
 	}
+	h.invalidateCache(ctx, groupID)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -188,6 +209,7 @@ func (h *Handler) exitGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to exit group")
 		return
 	}
+	h.invalidateCache(ctx, groupID)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

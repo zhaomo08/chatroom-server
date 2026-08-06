@@ -129,10 +129,20 @@ func (f *fakeStore) GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64)
 	return roomID, nil
 }
 
+type fakeMemberCache struct {
+	invalidated []int64
+}
+
+func (c *fakeMemberCache) Invalidate(ctx context.Context, groupID int64) error {
+	c.invalidated = append(c.invalidated, groupID)
+	return nil
+}
+
 func TestCreateGroupAndAddMember(t *testing.T) {
 	secret := []byte("test-secret")
 	store := newFakeStore()
-	h := NewHandler(store)
+	cache := &fakeMemberCache{}
+	h := NewHandler(store, cache)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -163,6 +173,9 @@ func TestCreateGroupAndAddMember(t *testing.T) {
 	if len(members) != 2 {
 		t.Fatalf("len(members) = %d, want 2", len(members))
 	}
+	if len(cache.invalidated) != 1 || cache.invalidated[0] != roomID {
+		t.Fatalf("expected addMember to invalidate the cache for group %d, got %v", roomID, cache.invalidated)
+	}
 }
 
 func TestRemoveMemberForbiddenForRegularMember(t *testing.T) {
@@ -172,7 +185,7 @@ func TestRemoveMemberForbiddenForRegularMember(t *testing.T) {
 	store.AddMember(context.Background(), roomID, 2, RoleMember)
 	store.AddMember(context.Background(), roomID, 3, RoleMember)
 
-	h := NewHandler(store)
+	h := NewHandler(store, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -195,7 +208,7 @@ func TestOwnerCanRemoveAdmin(t *testing.T) {
 	roomID, _ := store.CreateGroupRoom(context.Background(), 1, "g", "")
 	store.AddMember(context.Background(), roomID, 2, RoleAdmin)
 
-	h := NewHandler(store)
+	h := NewHandler(store, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -214,7 +227,7 @@ func TestOwnerCanRemoveAdmin(t *testing.T) {
 func TestCreateFriendRoomThenListRooms(t *testing.T) {
 	secret := []byte("test-secret")
 	store := newFakeStore()
-	h := NewHandler(store)
+	h := NewHandler(store, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -266,7 +279,7 @@ func TestCreateFriendRoomThenListRooms(t *testing.T) {
 func TestCreateFriendRoomRejectsSelf(t *testing.T) {
 	secret := []byte("test-secret")
 	store := newFakeStore()
-	h := NewHandler(store)
+	h := NewHandler(store, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -290,7 +303,7 @@ func TestSetAdminForbiddenForNonOwner(t *testing.T) {
 	store.AddMember(context.Background(), roomID, 2, RoleMember)
 	store.AddMember(context.Background(), roomID, 3, RoleMember)
 
-	h := NewHandler(store)
+	h := NewHandler(store, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)

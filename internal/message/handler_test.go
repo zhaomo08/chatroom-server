@@ -60,9 +60,10 @@ func (f *fakeMsgStore) ListByRoomCursor(ctx context.Context, roomID, beforeID in
 }
 
 type fakeRoomStore struct {
-	rooms   map[int64]*room.Room
-	members map[int64][]room.Member
-	friends map[int64]*room.Friend
+	rooms            map[int64]*room.Room
+	members          map[int64][]room.Member
+	friends          map[int64]*room.Friend
+	listMembersCalls int
 }
 
 func (f *fakeRoomStore) CreateGroupRoom(ctx context.Context, ownerUID int64, name, avatar string) (int64, error) {
@@ -76,6 +77,7 @@ func (f *fakeRoomStore) SetRole(ctx context.Context, groupID, uid int64, role ro
 	return nil
 }
 func (f *fakeRoomStore) ListMembers(ctx context.Context, groupID int64) ([]room.Member, error) {
+	f.listMembersCalls++
 	return f.members[groupID], nil
 }
 func (f *fakeRoomStore) GetMember(ctx context.Context, groupID, uid int64) (*room.Member, error) {
@@ -127,6 +129,66 @@ func (h *fakeHub) BroadcastAll(payload []byte) {
 	h.broadcast = append(h.broadcast, payload)
 }
 
+type fakeGroupMemberCache struct {
+	entries map[int64][]int64
+}
+
+func newFakeGroupMemberCache() *fakeGroupMemberCache {
+	return &fakeGroupMemberCache{entries: map[int64][]int64{}}
+}
+
+func (c *fakeGroupMemberCache) Get(ctx context.Context, groupID int64) ([]int64, bool, error) {
+	uids, ok := c.entries[groupID]
+	return uids, ok, nil
+}
+
+func (c *fakeGroupMemberCache) Set(ctx context.Context, groupID int64, uids []int64, ttl time.Duration) error {
+	c.entries[groupID] = uids
+	return nil
+}
+
+func TestSendMessageUsesCacheOnSecondSend(t *testing.T) {
+	secret := []byte("test-secret")
+	msgStore := newFakeMsgStore()
+	roomStore := &fakeRoomStore{
+		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
+		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}, {GroupID: 10, UID: 2, Role: room.RoleMember}}},
+	}
+	cache := newFakeGroupMemberCache()
+	h := NewHandler(msgStore, roomStore, newFakeHub(), cache)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+	token, _ := auth.GenerateToken(1, secret, time.Hour)
+
+	send := func(content string) int {
+		body, _ := json.Marshal(map[string]any{"room_id": 10, "content": content})
+		req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := send("first"); code != http.StatusOK {
+		t.Fatalf("first send status = %d", code)
+	}
+	// canPost + broadcast within this one request already share the cache
+	// entry Set by canPost's miss, so a single send should only hit the
+	// database once, not twice.
+	if roomStore.listMembersCalls != 1 {
+		t.Fatalf("listMembersCalls after first send = %d, want 1", roomStore.listMembersCalls)
+	}
+
+	if code := send("second"); code != http.StatusOK {
+		t.Fatalf("second send status = %d", code)
+	}
+	// A second send to the same group must be served entirely from cache.
+	if roomStore.listMembersCalls != 1 {
+		t.Fatalf("listMembersCalls after second send = %d, want still 1 (cache hit)", roomStore.listMembersCalls)
+	}
+}
+
 func TestSendMessageToGroupMembers(t *testing.T) {
 	secret := []byte("test-secret")
 	msgStore := newFakeMsgStore()
@@ -135,7 +197,7 @@ func TestSendMessageToGroupMembers(t *testing.T) {
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}, {GroupID: 10, UID: 2, Role: room.RoleMember}}},
 	}
 	hub := newFakeHub()
-	h := NewHandler(msgStore, roomStore, hub)
+	h := NewHandler(msgStore, roomStore, hub, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -162,7 +224,7 @@ func TestSendForbiddenForNonMember(t *testing.T) {
 		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
 	}
-	h := NewHandler(msgStore, roomStore, newFakeHub())
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -187,7 +249,7 @@ func TestSendMessageToHotRoomBroadcastsAll(t *testing.T) {
 		rooms: map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup, HotFlag: room.HotYes}},
 	}
 	hub := newFakeHub()
-	h := NewHandler(msgStore, roomStore, hub)
+	h := NewHandler(msgStore, roomStore, hub, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -214,7 +276,7 @@ func TestSendImageMessageWithExtra(t *testing.T) {
 		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
 	}
-	h := NewHandler(msgStore, roomStore, newFakeHub())
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -252,7 +314,7 @@ func TestSendImageMessageWithoutExtraRejected(t *testing.T) {
 		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
 	}
-	h := NewHandler(msgStore, roomStore, newFakeHub())
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -278,7 +340,7 @@ func TestRecallOwnMessageWithinWindow(t *testing.T) {
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleMember}}},
 	}
 	hub := newFakeHub()
-	h := NewHandler(msgStore, roomStore, hub)
+	h := NewHandler(msgStore, roomStore, hub, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -319,7 +381,7 @@ func TestRecallForbiddenForOtherMember(t *testing.T) {
 		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleMember}, {GroupID: 10, UID: 2, Role: room.RoleMember}}},
 	}
-	h := NewHandler(msgStore, roomStore, newFakeHub())
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -341,7 +403,7 @@ func TestPageListsMessages(t *testing.T) {
 	msgStore.Insert(context.Background(), &Message{RoomID: 10, FromUID: 1, Content: "a", Type: TypeText})
 	msgStore.Insert(context.Background(), &Message{RoomID: 10, FromUID: 1, Content: "b", Type: TypeText})
 	roomStore := &fakeRoomStore{rooms: map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}}}
-	h := NewHandler(msgStore, roomStore, newFakeHub())
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)

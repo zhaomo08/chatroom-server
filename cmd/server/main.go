@@ -38,9 +38,7 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	}
 
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPass})
-	// Wired for future use by room/message services that want cached member
-	// lookups instead of hitting MySQL on every send; not consumed yet.
-	_ = cache.New(rdb)
+	memberCache := cache.New(rdb)
 
 	mediaStore, err := storage.NewMinioStore(context.Background(),
 		cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioBucket, cfg.MinioUseSSL)
@@ -54,8 +52,8 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	hub := ws.NewHub()
 
 	authHandler := auth.NewHandler(authStore, []byte(cfg.JWTSecret), cfg.JWTTTL)
-	roomHandler := room.NewHandler(roomStore)
-	msgHandler := message.NewHandler(msgStore, roomStore, hub)
+	roomHandler := room.NewHandler(roomStore, memberCache)
+	msgHandler := message.NewHandler(msgStore, roomStore, hub, memberCache)
 	wsHandler := ws.NewHandler(hub, []byte(cfg.JWTSecret))
 	mediaHandler := media.NewHandler(mediaStore, []byte(cfg.JWTSecret))
 	callHandler := call.NewHandler(roomStore, hub, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret, cfg.LiveKitPublicURL)
