@@ -19,6 +19,23 @@ services:
     ports:
       - "6379:6379"
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
   app:
     build: .
     depends_on:
@@ -26,10 +43,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      minio:
+        condition: service_healthy
     environment:
       CHATROOM_MYSQL_DSN: "chatroom:chatroom@tcp(mysql:3306)/chatroom?parseTime=true&charset=utf8mb4"
       CHATROOM_REDIS_ADDR: "redis:6379"
       CHATROOM_JWT_SECRET: "dev-secret-change-me"
+      CHATROOM_MINIO_ENDPOINT: "minio:9000"
+      CHATROOM_MINIO_ACCESS_KEY: "minioadmin"
+      CHATROOM_MINIO_SECRET_KEY: "minioadmin"
+      CHATROOM_MINIO_BUCKET: "chatroom-media"
     ports:
       - "8080:8080"
 
@@ -39,3 +62,6 @@ services:
       - app
     ports:
       - "8081:80"
+
+volumes:
+  minio-data:
