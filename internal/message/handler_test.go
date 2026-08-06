@@ -148,6 +148,31 @@ func TestSendMessageToGroupMembers(t *testing.T) {
 	}
 }
 
+func TestSendForbiddenForNonMember(t *testing.T) {
+	secret := []byte("test-secret")
+	msgStore := newFakeMsgStore()
+	roomStore := &fakeRoomStore{
+		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
+		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
+	}
+	h := NewHandler(msgStore, roomStore, newFakeHub())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	// uid 2 is not a member of room 10.
+	token, _ := auth.GenerateToken(2, secret, time.Hour)
+	body, _ := json.Marshal(map[string]any{"room_id": 10, "content": "hi"})
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSendMessageToHotRoomBroadcastsAll(t *testing.T) {
 	secret := []byte("test-secret")
 	msgStore := newFakeMsgStore()

@@ -66,6 +66,10 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "room not found")
 		return
 	}
+	if !h.canPost(ctx, *rm, uid) {
+		writeError(w, http.StatusForbidden, "not a participant of this room")
+		return
+	}
 
 	msg := &Message{RoomID: req.RoomID, FromUID: uid, Content: req.Content, Type: req.Type, ReplyMsgID: req.ReplyMsgID}
 	id, err := h.messages.Insert(ctx, msg)
@@ -78,6 +82,25 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	h.broadcast(ctx, *rm, msg)
 
 	writeJSON(w, http.StatusOK, msg)
+}
+
+// canPost reports whether uid may send a message into rm. Hot rooms are
+// public discussion rooms by design, so any authenticated user may post;
+// ordinary groups require membership and 1:1 rooms require being one of the
+// two participants.
+func (h *Handler) canPost(ctx context.Context, rm room.Room, uid int64) bool {
+	if rm.IsHot() {
+		return true
+	}
+	if rm.IsGroup() {
+		_, err := h.rooms.GetMember(ctx, rm.ID, uid)
+		return err == nil
+	}
+	friend, err := h.rooms.GetFriendByRoomID(ctx, rm.ID)
+	if err != nil {
+		return false
+	}
+	return friend.UID1 == uid || friend.UID2 == uid
 }
 
 func (h *Handler) broadcast(ctx context.Context, rm room.Room, msg *Message) {

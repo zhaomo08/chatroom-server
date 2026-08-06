@@ -32,9 +32,11 @@ func (s *SQLStore) Insert(ctx context.Context, m *Message) (int64, error) {
 	return res.LastInsertId()
 }
 
+const messageColumns = `id, room_id, from_uid, content, type, reply_msg_id, status, create_time`
+
 func (s *SQLStore) GetByID(ctx context.Context, id int64) (*Message, error) {
 	var m Message
-	err := s.db.GetContext(ctx, &m, `SELECT * FROM message WHERE id = ?`, id)
+	err := s.db.GetContext(ctx, &m, `SELECT `+messageColumns+` FROM message WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -60,10 +62,10 @@ func (s *SQLStore) ListByRoomCursor(ctx context.Context, roomID, beforeID int64,
 	var err error
 	if beforeID == 0 {
 		err = s.db.SelectContext(ctx, &msgs,
-			`SELECT * FROM message WHERE room_id = ? ORDER BY id DESC LIMIT ?`, roomID, limit)
+			`SELECT `+messageColumns+` FROM message WHERE room_id = ? ORDER BY id DESC LIMIT ?`, roomID, limit)
 	} else {
 		err = s.db.SelectContext(ctx, &msgs,
-			`SELECT * FROM message WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?`, roomID, beforeID, limit)
+			`SELECT `+messageColumns+` FROM message WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?`, roomID, beforeID, limit)
 	}
 	return msgs, err
 }

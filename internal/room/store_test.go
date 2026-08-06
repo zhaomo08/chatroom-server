@@ -14,7 +14,7 @@ func TestSQLStoreCreateGroupAndMembers(t *testing.T) {
 		t.Skip("CHATROOM_TEST_MYSQL_DSN not set, skipping integration test")
 	}
 
-	if err := db.Migrate(dsn, "../../migrations"); err != nil {
+	if err := db.Migrate(dsn); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
 	conn, err := db.Connect(dsn)

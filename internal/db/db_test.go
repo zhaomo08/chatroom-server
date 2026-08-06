@@ -11,7 +11,7 @@ func TestConnectAndMigrate(t *testing.T) {
 		t.Skip("CHATROOM_TEST_MYSQL_DSN not set, skipping integration test (start docker-compose mysql to run this)")
 	}
 
-	if err := Migrate(dsn, "../../migrations"); err != nil {
+	if err := Migrate(dsn); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
 
