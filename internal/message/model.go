@@ -9,6 +9,8 @@ const (
 	TypeEmoji  Type = 2
 	TypeRecall Type = 3
 	TypeSystem Type = 4
+	TypeImage  Type = 5
+	TypeVideo  Type = 6
 )
 
 type Status int
@@ -26,6 +28,10 @@ type Message struct {
 	Type       Type      `db:"type"`
 	ReplyMsgID int64     `db:"reply_msg_id"`
 	Status     Status    `db:"status"`
+	// Extra carries type-specific metadata as raw JSON text, e.g.
+	// {"file_id":"...","thumb_id":"...","width":800,"height":600} for
+	// TypeImage/TypeVideo. Unused (nil) for text/emoji/recall/system.
+	Extra      *string   `db:"extra"`
 	CreateTime time.Time `db:"create_time"`
 }
 

@@ -36,25 +36,37 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 type sendRequest struct {
-	RoomID     int64  `json:"room_id"`
-	Content    string `json:"content"`
-	Type       Type   `json:"type"`
-	ReplyMsgID int64  `json:"reply_msg_id"`
+	RoomID     int64           `json:"room_id"`
+	Content    string          `json:"content"`
+	Type       Type            `json:"type"`
+	ReplyMsgID int64           `json:"reply_msg_id"`
+	Extra      json.RawMessage `json:"extra"`
 }
 
 func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	uid, _ := auth.UIDFromContext(r.Context())
 
 	var req sendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" || req.RoomID == 0 {
-		writeError(w, http.StatusBadRequest, "room_id and content are required")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RoomID == 0 {
+		writeError(w, http.StatusBadRequest, "room_id is required")
 		return
 	}
 	if req.Type == 0 {
 		req.Type = TypeText
 	}
-	if req.Type != TypeText && req.Type != TypeEmoji {
-		writeError(w, http.StatusBadRequest, "type must be text or emoji when sending")
+	switch req.Type {
+	case TypeText, TypeEmoji:
+		if req.Content == "" {
+			writeError(w, http.StatusBadRequest, "content is required")
+			return
+		}
+	case TypeImage, TypeVideo:
+		if len(req.Extra) == 0 {
+			writeError(w, http.StatusBadRequest, "extra with file_id is required")
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported message type")
 		return
 	}
 
@@ -72,6 +84,10 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := &Message{RoomID: req.RoomID, FromUID: uid, Content: req.Content, Type: req.Type, ReplyMsgID: req.ReplyMsgID}
+	if len(req.Extra) > 0 {
+		extra := string(req.Extra)
+		msg.Extra = &extra
+	}
 	id, err := h.messages.Insert(ctx, msg)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to send message")

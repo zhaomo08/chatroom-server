@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,68 @@ func TestSendMessageToHotRoomBroadcastsAll(t *testing.T) {
 	}
 	if len(hub.broadcast) != 1 {
 		t.Fatalf("expected one BroadcastAll call for a hot room, got %d", len(hub.broadcast))
+	}
+}
+
+func TestSendImageMessageWithExtra(t *testing.T) {
+	secret := []byte("test-secret")
+	msgStore := newFakeMsgStore()
+	roomStore := &fakeRoomStore{
+		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
+		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
+	}
+	h := NewHandler(msgStore, roomStore, newFakeHub())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	token, _ := auth.GenerateToken(1, secret, time.Hour)
+	body, _ := json.Marshal(map[string]any{
+		"room_id": 10,
+		"type":    TypeImage,
+		"extra":   map[string]any{"file_id": "abc123", "thumb_id": "thumb123", "width": 800, "height": 600},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp Message
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Type != TypeImage {
+		t.Errorf("Type = %v, want TypeImage", resp.Type)
+	}
+	if resp.Extra == nil || !strings.Contains(*resp.Extra, "abc123") {
+		t.Errorf("Extra = %v, want it to contain the file_id", resp.Extra)
+	}
+}
+
+func TestSendImageMessageWithoutExtraRejected(t *testing.T) {
+	secret := []byte("test-secret")
+	msgStore := newFakeMsgStore()
+	roomStore := &fakeRoomStore{
+		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
+		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
+	}
+	h := NewHandler(msgStore, roomStore, newFakeHub())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	token, _ := auth.GenerateToken(1, secret, time.Hour)
+	body, _ := json.Marshal(map[string]any{"room_id": 10, "type": TypeImage})
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

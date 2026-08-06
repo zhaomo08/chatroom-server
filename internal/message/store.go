@@ -24,15 +24,15 @@ func NewSQLStore(db *sqlx.DB) *SQLStore { return &SQLStore{db: db} }
 
 func (s *SQLStore) Insert(ctx context.Context, m *Message) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO message (room_id, from_uid, content, type, reply_msg_id, status) VALUES (?, ?, ?, ?, ?, ?)`,
-		m.RoomID, m.FromUID, m.Content, m.Type, m.ReplyMsgID, m.Status)
+		`INSERT INTO message (room_id, from_uid, content, type, reply_msg_id, status, extra) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		m.RoomID, m.FromUID, m.Content, m.Type, m.ReplyMsgID, m.Status, m.Extra)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
 }
 
-const messageColumns = `id, room_id, from_uid, content, type, reply_msg_id, status, create_time`
+const messageColumns = `id, room_id, from_uid, content, type, reply_msg_id, status, extra, create_time`
 
 func (s *SQLStore) GetByID(ctx context.Context, id int64) (*Message, error) {
 	var m Message
