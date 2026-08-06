@@ -102,6 +102,12 @@ func (f *fakeRoomStore) GetFriendByRoomID(ctx context.Context, roomID int64) (*r
 	}
 	return fr, nil
 }
+func (f *fakeRoomStore) ListRoomsForUser(ctx context.Context, uid int64) ([]room.RoomSummary, error) {
+	return nil, nil
+}
+func (f *fakeRoomStore) GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64) (int64, error) {
+	return 0, nil
+}
 
 type fakeHub struct {
 	sentTo    map[int64][][]byte

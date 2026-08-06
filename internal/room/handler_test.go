@@ -95,6 +95,40 @@ func (f *fakeStore) GetFriendByRoomID(ctx context.Context, roomID int64) (*Frien
 	return fr, nil
 }
 
+func (f *fakeStore) ListRoomsForUser(ctx context.Context, uid int64) ([]RoomSummary, error) {
+	var out []RoomSummary
+	for roomID, members := range f.members {
+		if _, ok := members[uid]; ok {
+			out = append(out, RoomSummary{RoomID: roomID, Type: TypeGroup, Name: f.groups[roomID].Name})
+		}
+	}
+	for roomID, fr := range f.friends {
+		if fr.UID1 == uid || fr.UID2 == uid {
+			peer := fr.UID2
+			if fr.UID1 == uid {
+				peer = fr.UID2
+			} else {
+				peer = fr.UID1
+			}
+			out = append(out, RoomSummary{RoomID: roomID, Type: TypeFriend, PeerUID: peer})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64) (int64, error) {
+	for roomID, fr := range f.friends {
+		if (fr.UID1 == uid1 && fr.UID2 == uid2) || (fr.UID1 == uid2 && fr.UID2 == uid1) {
+			return roomID, nil
+		}
+	}
+	f.nextID++
+	roomID := f.nextID
+	f.rooms[roomID] = &Room{ID: roomID, Type: TypeFriend}
+	f.friends[roomID] = &Friend{ID: roomID, RoomID: roomID, UID1: uid1, UID2: uid2}
+	return roomID, nil
+}
+
 func TestCreateGroupAndAddMember(t *testing.T) {
 	secret := []byte("test-secret")
 	store := newFakeStore()
@@ -174,6 +208,78 @@ func TestOwnerCanRemoveAdmin(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateFriendRoomThenListRooms(t *testing.T) {
+	secret := []byte("test-secret")
+	store := newFakeStore()
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	token1, _ := auth.GenerateToken(1, secret, 3600_000_000_000)
+	body, _ := json.Marshal(map[string]int64{"uid": 2})
+	req := httptest.NewRequest(http.MethodPost, "/api/rooms/friends", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token1)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("createFriendRoom status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var created map[string]int64
+	json.NewDecoder(rec.Body).Decode(&created)
+	roomID := created["room_id"]
+
+	// Calling it again for the same pair must return the same room, not create a duplicate.
+	req = httptest.NewRequest(http.MethodPost, "/api/rooms/friends", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token1)
+	rec = httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	var createdAgain map[string]int64
+	json.NewDecoder(rec.Body).Decode(&createdAgain)
+	if createdAgain["room_id"] != roomID {
+		t.Fatalf("second call created a new room %d, want reuse of %d", createdAgain["room_id"], roomID)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/rooms", nil)
+	req.Header.Set("Authorization", "Bearer "+token1)
+	rec = httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("listRooms status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var rooms []RoomSummary
+	json.NewDecoder(rec.Body).Decode(&rooms)
+	found := false
+	for _, rm := range rooms {
+		if rm.RoomID == roomID && rm.Type == TypeFriend && rm.PeerUID == 2 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the DM room with peer_uid=2 in list, got %+v", rooms)
+	}
+}
+
+func TestCreateFriendRoomRejectsSelf(t *testing.T) {
+	secret := []byte("test-secret")
+	store := newFakeStore()
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	token, _ := auth.GenerateToken(1, secret, 3600_000_000_000)
+	body, _ := json.Marshal(map[string]int64{"uid": 1})
+	req := httptest.NewRequest(http.MethodPost, "/api/rooms/friends", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
 

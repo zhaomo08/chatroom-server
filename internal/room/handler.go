@@ -15,12 +15,56 @@ type Handler struct{ store Store }
 func NewHandler(store Store) *Handler { return &Handler{store: store} }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/rooms", h.listRooms)
+	mux.HandleFunc("POST /api/rooms/friends", h.createFriendRoom)
 	mux.HandleFunc("POST /api/rooms/groups", h.createGroup)
 	mux.HandleFunc("POST /api/rooms/groups/{roomID}/members", h.addMember)
 	mux.HandleFunc("DELETE /api/rooms/groups/{roomID}/members/{uid}", h.removeMember)
 	mux.HandleFunc("DELETE /api/rooms/groups/{roomID}/members/me", h.exitGroup)
 	mux.HandleFunc("PUT /api/rooms/groups/{roomID}/admins/{uid}", h.setAdmin)
 	mux.HandleFunc("GET /api/rooms/groups/{roomID}/members", h.listMembers)
+}
+
+func (h *Handler) listRooms(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UIDFromContext(r.Context())
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	rooms, err := h.store.ListRoomsForUser(ctx, uid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list rooms")
+		return
+	}
+	writeJSON(w, http.StatusOK, rooms)
+}
+
+type createFriendRoomRequest struct {
+	UID int64 `json:"uid"`
+}
+
+func (h *Handler) createFriendRoom(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UIDFromContext(r.Context())
+
+	var req createFriendRoomRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UID == 0 {
+		writeError(w, http.StatusBadRequest, "uid is required")
+		return
+	}
+	if req.UID == uid {
+		writeError(w, http.StatusBadRequest, "cannot start a DM with yourself")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	roomID, err := h.store.GetOrCreateFriendRoom(ctx, uid, req.UID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start conversation")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"room_id": roomID})
 }
 
 type createGroupRequest struct {
