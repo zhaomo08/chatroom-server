@@ -58,7 +58,7 @@ func (s *SQLStore) AddMark(ctx context.Context, msgID, uid int64, markType int) 
 // ListByRoomCursor returns up to limit messages in roomID with id < beforeID,
 // newest first. Pass beforeID = 0 to start from the most recent message.
 func (s *SQLStore) ListByRoomCursor(ctx context.Context, roomID, beforeID int64, limit int) ([]Message, error) {
-	var msgs []Message
+	msgs := []Message{}
 	var err error
 	if beforeID == 0 {
 		err = s.db.SelectContext(ctx, &msgs,

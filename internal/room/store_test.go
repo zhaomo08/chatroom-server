@@ -104,3 +104,31 @@ func TestSQLStoreListRoomsAndFriendRoom(t *testing.T) {
 		t.Fatalf("ListRoomsForUser missing expected rooms, got %+v", rooms)
 	}
 }
+
+func TestSQLStoreListRoomsForUserWithNoRoomsReturnsEmptySlice(t *testing.T) {
+	dsn := os.Getenv("CHATROOM_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("CHATROOM_TEST_MYSQL_DSN not set, skipping integration test")
+	}
+
+	if err := db.Migrate(dsn); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	conn, err := db.Connect(dsn)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer conn.Close()
+
+	store := NewSQLStore(conn)
+	rooms, err := store.ListRoomsForUser(context.Background(), 987654)
+	if err != nil {
+		t.Fatalf("ListRoomsForUser: %v", err)
+	}
+	// json.Marshal(nil slice) produces "null", which breaks clients that call
+	// .map()/.forEach() on the response; a user with no rooms must still
+	// serialize as "[]".
+	if rooms == nil {
+		t.Fatal("ListRoomsForUser returned a nil slice for a user with no rooms, want a non-nil empty slice")
+	}
+}

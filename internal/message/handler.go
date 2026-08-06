@@ -164,6 +164,12 @@ func (h *Handler) recall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to recall message")
 		return
 	}
+
+	msg.Status = StatusDeleted
+	if rm, err := h.rooms.GetRoom(ctx, msg.RoomID); err == nil {
+		h.broadcast(ctx, *rm, msg)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

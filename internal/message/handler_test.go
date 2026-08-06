@@ -214,7 +214,8 @@ func TestRecallOwnMessageWithinWindow(t *testing.T) {
 		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
 		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleMember}}},
 	}
-	h := NewHandler(msgStore, roomStore, newFakeHub())
+	hub := newFakeHub()
+	h := NewHandler(msgStore, roomStore, hub)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	wrapped := auth.Middleware(secret)(mux)
@@ -230,6 +231,14 @@ func TestRecallOwnMessageWithinWindow(t *testing.T) {
 	}
 	if msgStore.msgs[1].Status != StatusDeleted {
 		t.Error("message should be marked deleted after recall")
+	}
+	if len(hub.sentTo[1]) != 1 {
+		t.Fatalf("expected the recall to be broadcast to room members, sentTo = %+v", hub.sentTo)
+	}
+	var broadcast Message
+	json.Unmarshal(hub.sentTo[1][0], &broadcast)
+	if broadcast.Status != StatusDeleted {
+		t.Errorf("broadcast message Status = %v, want StatusDeleted", broadcast.Status)
 	}
 }
 

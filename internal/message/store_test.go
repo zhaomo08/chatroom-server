@@ -40,3 +40,31 @@ func TestSQLStoreInsertAndPage(t *testing.T) {
 		t.Fatalf("len(page) = %d, want 2", len(page))
 	}
 }
+
+func TestSQLStoreListByRoomCursorEmptyRoomReturnsEmptySlice(t *testing.T) {
+	dsn := os.Getenv("CHATROOM_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("CHATROOM_TEST_MYSQL_DSN not set, skipping integration test")
+	}
+
+	if err := db.Migrate(dsn); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	conn, err := db.Connect(dsn)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer conn.Close()
+
+	store := NewSQLStore(conn)
+	page, err := store.ListByRoomCursor(context.Background(), 987654, 0, 20)
+	if err != nil {
+		t.Fatalf("ListByRoomCursor: %v", err)
+	}
+	// json.Marshal(nil slice) produces "null", which breaks clients that call
+	// .slice()/.map() on the response; a room with no messages must still
+	// serialize as "[]".
+	if page == nil {
+		t.Fatal("ListByRoomCursor returned a nil slice for an empty room, want a non-nil empty slice")
+	}
+}

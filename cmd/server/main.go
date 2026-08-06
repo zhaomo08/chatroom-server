@@ -54,6 +54,7 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	roomHandler.RegisterRoutes(protected)
 	msgHandler.RegisterRoutes(protected)
 	authMiddleware := auth.Middleware([]byte(cfg.JWTSecret))
+	mux.Handle("/api/rooms", authMiddleware(protected))
 	mux.Handle("/api/rooms/", authMiddleware(protected))
 	mux.Handle("/api/messages", authMiddleware(protected))
 	mux.Handle("/api/messages/", authMiddleware(protected))

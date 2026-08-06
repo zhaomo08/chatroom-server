@@ -89,7 +89,7 @@ func (s *SQLStore) SetRole(ctx context.Context, groupID, uid int64, role Role) e
 }
 
 func (s *SQLStore) ListMembers(ctx context.Context, groupID int64) ([]Member, error) {
-	var members []Member
+	members := []Member{}
 	err := s.db.SelectContext(ctx, &members, `SELECT * FROM group_member WHERE group_id = ? ORDER BY role, id`, groupID)
 	return members, err
 }
@@ -131,7 +131,7 @@ func (s *SQLStore) GetFriendByRoomID(ctx context.Context, roomID int64) (*Friend
 }
 
 func (s *SQLStore) ListRoomsForUser(ctx context.Context, uid int64) ([]RoomSummary, error) {
-	var out []RoomSummary
+	out := []RoomSummary{}
 	err := s.db.SelectContext(ctx, &out, `
 		(SELECT r.id AS room_id, r.type AS type, g.name AS name, 0 AS peer_uid, r.active_time AS active_time
 		 FROM group_member gm
