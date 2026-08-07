@@ -107,6 +107,12 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg.ID = id
+	// Insert only returns the new id; the DB fills create_time via its own
+	// DEFAULT CURRENT_TIMESTAMP, which this in-memory struct never sees.
+	// Without this, the HTTP response and WS broadcast for a just-sent
+	// message would carry the Go zero time, breaking any client-side
+	// timestamp/date-grouping display until the room is reloaded from GET.
+	msg.CreateTime = time.Now()
 
 	h.broadcast(ctx, *rm, msg)
 	h.trackActivity(ctx, *rm, uid, msg.ID)
