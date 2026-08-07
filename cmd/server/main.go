@@ -72,6 +72,7 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	msgHandler.RegisterRoutes(protected)
 	mediaHandler.RegisterRoutes(protected)
 	callHandler.RegisterRoutes(protected)
+	authHandler.RegisterProtected(protected)
 	authMiddleware := auth.Middleware([]byte(cfg.JWTSecret))
 	mux.Handle("/api/rooms", authMiddleware(protected))
 	mux.Handle("/api/rooms/", authMiddleware(protected))
@@ -80,6 +81,7 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	mux.Handle("POST /api/media/upload", authMiddleware(protected))
 	mux.Handle("POST /api/calls/token", authMiddleware(protected))
 	mux.Handle("POST /api/calls/invite", authMiddleware(protected))
+	mux.Handle("POST /api/users/lookup", authMiddleware(protected))
 
 	return mux
 }

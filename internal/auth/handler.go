@@ -22,6 +22,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/login", h.handleLogin)
 }
 
+// RegisterProtected registers routes that need an authenticated caller.
+// Mounted behind the Bearer-header middleware, unlike Register above.
+func (h *Handler) RegisterProtected(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/users/lookup", h.handleLookup)
+}
+
 type registerRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -88,6 +94,42 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+type lookupRequest struct {
+	UIDs []int64 `json:"uids"`
+}
+
+type userInfo struct {
+	UID      int64  `json:"uid"`
+	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
+}
+
+func (h *Handler) handleLookup(w http.ResponseWriter, r *http.Request) {
+	var req lookupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.UIDs) == 0 || len(req.UIDs) > 200 {
+		writeError(w, http.StatusBadRequest, "uids must contain 1-200 entries")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	users, err := h.store.GetUsersByIDs(ctx, req.UIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up users")
+		return
+	}
+	out := make([]userInfo, len(users))
+	for i, u := range users {
+		out[i] = userInfo{UID: u.ID, Nickname: u.Nickname, Avatar: u.Avatar}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

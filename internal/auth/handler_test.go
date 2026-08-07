@@ -27,6 +27,20 @@ func (f *fakeStore) CreateUser(ctx context.Context, username, passwordHash, nick
 	return f.next, nil
 }
 
+func (f *fakeStore) GetUsersByIDs(ctx context.Context, ids []int64) ([]User, error) {
+	want := map[int64]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []User
+	for _, u := range f.users {
+		if want[u.ID] {
+			out = append(out, *u)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) GetUserByUsername(ctx context.Context, username string) (*User, error) {
 	u, ok := f.users[username]
 	if !ok {
@@ -82,5 +96,45 @@ func TestHandlerLoginWrongPassword(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestHandlerLookup(t *testing.T) {
+	store := newFakeStore()
+	store.users["alice"] = &User{ID: 1, Username: "alice", Nickname: "Alice", Avatar: "a.png"}
+	store.users["bob"] = &User{ID: 2, Username: "bob", Nickname: "Bob"}
+	h := NewHandler(store, []byte("test-secret"), time.Hour)
+	mux := http.NewServeMux()
+	h.RegisterProtected(mux)
+
+	body, _ := json.Marshal(map[string]any{"uids": []int64{1, 2, 999}})
+	req := httptest.NewRequest(http.MethodPost, "/api/users/lookup", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var users []userInfo
+	if err := json.NewDecoder(rec.Body).Decode(&users); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("len(users) = %d, want 2 (unknown uid 999 silently omitted)", len(users))
+	}
+}
+
+func TestHandlerLookupRejectsEmpty(t *testing.T) {
+	h := NewHandler(newFakeStore(), []byte("test-secret"), time.Hour)
+	mux := http.NewServeMux()
+	h.RegisterProtected(mux)
+
+	body, _ := json.Marshal(map[string]any{"uids": []int64{}})
+	req := httptest.NewRequest(http.MethodPost, "/api/users/lookup", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
