@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -15,11 +16,14 @@ var ErrNotFound = errors.New("not found")
 // Name is the group name and PeerUID is 0; for a 1:1 room Name is empty and
 // PeerUID is the other participant's uid.
 type RoomSummary struct {
-	RoomID     int64     `db:"room_id"`
-	Type       Type      `db:"type"`
-	Name       string    `db:"name"`
-	PeerUID    int64     `db:"peer_uid"`
-	ActiveTime time.Time `db:"active_time"`
+	RoomID        int64      `db:"room_id"`
+	Type          Type       `db:"type"`
+	Name          string     `db:"name"`
+	PeerUID       int64      `db:"peer_uid"`
+	ActiveTime    time.Time  `db:"active_time"`
+	LastMessage   *string    `db:"last_message"`
+	LastMessageAt *time.Time `db:"last_message_at"`
+	UnreadCount   int        `db:"unread_count"`
 }
 
 type Store interface {
@@ -34,6 +38,18 @@ type Store interface {
 	GetFriendByRoomID(ctx context.Context, roomID int64) (*Friend, error)
 	ListRoomsForUser(ctx context.Context, uid int64) ([]RoomSummary, error)
 	GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64) (roomID int64, err error)
+
+	// TouchRoom bumps a room's active_time and last_msg_id after a new
+	// message is inserted, so ListRoomsForUser can sort by actual recent
+	// activity and show a last-message preview.
+	TouchRoom(ctx context.Context, roomID, msgID int64) error
+	// BumpUnread increments contact.unread_count for every uid in
+	// recipientUIDs (creating the row if it doesn't exist yet).
+	BumpUnread(ctx context.Context, roomID int64, recipientUIDs []int64) error
+	// ResetUnread zeroes uid's unread count for roomID — called for the
+	// sender right after they post (they've obviously "read" their own
+	// message) and by the explicit "mark room as read" endpoint.
+	ResetUnread(ctx context.Context, uid, roomID int64) error
 }
 
 type SQLStore struct{ db *sqlx.DB }
@@ -133,20 +149,61 @@ func (s *SQLStore) GetFriendByRoomID(ctx context.Context, roomID int64) (*Friend
 func (s *SQLStore) ListRoomsForUser(ctx context.Context, uid int64) ([]RoomSummary, error) {
 	out := []RoomSummary{}
 	err := s.db.SelectContext(ctx, &out, `
-		(SELECT r.id AS room_id, r.type AS type, g.name AS name, 0 AS peer_uid, r.active_time AS active_time
+		(SELECT r.id AS room_id, r.type AS type, g.name AS name, 0 AS peer_uid, r.active_time AS active_time,
+		        lm.content AS last_message, lm.create_time AS last_message_at,
+		        COALESCE(c.unread_count, 0) AS unread_count
 		 FROM group_member gm
 		 JOIN room r ON r.id = gm.group_id
 		 JOIN room_group g ON g.room_id = r.id
+		 LEFT JOIN message lm ON lm.id = r.last_msg_id
+		 LEFT JOIN contact c ON c.room_id = r.id AND c.uid = gm.uid
 		 WHERE gm.uid = ?)
 		UNION ALL
 		(SELECT r.id AS room_id, r.type AS type, '' AS name,
 		        CASE WHEN f.uid1 = ? THEN f.uid2 ELSE f.uid1 END AS peer_uid,
-		        r.active_time AS active_time
+		        r.active_time AS active_time,
+		        lm.content AS last_message, lm.create_time AS last_message_at,
+		        COALESCE(c.unread_count, 0) AS unread_count
 		 FROM room_friend f
 		 JOIN room r ON r.id = f.room_id
+		 LEFT JOIN message lm ON lm.id = r.last_msg_id
+		 LEFT JOIN contact c ON c.room_id = r.id AND c.uid = ?
 		 WHERE f.uid1 = ? OR f.uid2 = ?)
-		ORDER BY active_time DESC`, uid, uid, uid, uid)
+		ORDER BY active_time DESC`, uid, uid, uid, uid, uid)
 	return out, err
+}
+
+// TouchRoom bumps active_time and last_msg_id after msgID was just inserted
+// into roomID. Called for every message type including hot-room broadcasts,
+// so a room's recency always reflects real traffic.
+func (s *SQLStore) TouchRoom(ctx context.Context, roomID, msgID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE room SET active_time = NOW(), last_msg_id = ? WHERE id = ?`, msgID, roomID)
+	return err
+}
+
+func (s *SQLStore) BumpUnread(ctx context.Context, roomID int64, recipientUIDs []int64) error {
+	if len(recipientUIDs) == 0 {
+		return nil
+	}
+	values := make([]string, len(recipientUIDs))
+	args := make([]any, 0, len(recipientUIDs)*2)
+	for i, uid := range recipientUIDs {
+		values[i] = "(?, ?, NOW(), 1)"
+		args = append(args, uid, roomID)
+	}
+	query := `INSERT INTO contact (uid, room_id, active_time, unread_count) VALUES ` +
+		strings.Join(values, ",") +
+		` ON DUPLICATE KEY UPDATE active_time = NOW(), unread_count = unread_count + 1`
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (s *SQLStore) ResetUnread(ctx context.Context, uid, roomID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO contact (uid, room_id, active_time, unread_count) VALUES (?, ?, NOW(), 0)
+		 ON DUPLICATE KEY UPDATE unread_count = 0`,
+		uid, roomID)
+	return err
 }
 
 func (s *SQLStore) GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64) (int64, error) {

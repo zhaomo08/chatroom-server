@@ -109,6 +109,7 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	msg.ID = id
 
 	h.broadcast(ctx, *rm, msg)
+	h.trackActivity(ctx, *rm, uid, msg.ID)
 
 	writeJSON(w, http.StatusOK, msg)
 }
@@ -171,21 +172,54 @@ func (h *Handler) broadcast(ctx context.Context, rm room.Room, msg *Message) {
 		h.hub.BroadcastAll(payload)
 		return
 	}
-	var recipients []int64
+	recipients, err := h.resolveRecipients(ctx, rm)
+	if err != nil {
+		return
+	}
+	h.hub.SendToUsers(recipients, payload)
+}
+
+// resolveRecipients is shared by broadcast (who gets the WS push) and
+// trackActivity (whose unread count goes up) so a send resolves the
+// room's member/friend list once — the second call is a cache hit for
+// groups (see groupMemberUIDs).
+func (h *Handler) resolveRecipients(ctx context.Context, rm room.Room) ([]int64, error) {
 	if rm.IsGroup() {
 		uids, err := h.groupMemberUIDs(ctx, rm.ID)
 		if err != nil {
-			return
+			return nil, err
 		}
-		recipients = room.Recipients(rm, uids, nil)
-	} else {
-		friend, err := h.rooms.GetFriendByRoomID(ctx, rm.ID)
-		if err != nil {
-			return
-		}
-		recipients = room.Recipients(rm, nil, friend)
+		return room.Recipients(rm, uids, nil), nil
 	}
-	h.hub.SendToUsers(recipients, payload)
+	friend, err := h.rooms.GetFriendByRoomID(ctx, rm.ID)
+	if err != nil {
+		return nil, err
+	}
+	return room.Recipients(rm, nil, friend), nil
+}
+
+// trackActivity bumps the room's recency/last-message pointer and every
+// recipient's unread count for a genuinely new message. Deliberately not
+// called from recall(): recalling an existing message shouldn't bump the
+// room to the top of the list or create a fresh unread notification for
+// something the recipient may have already read.
+func (h *Handler) trackActivity(ctx context.Context, rm room.Room, senderUID, msgID int64) {
+	_ = h.rooms.TouchRoom(ctx, rm.ID, msgID)
+	if rm.IsHot() {
+		return // hot rooms aren't part of anyone's personal room list/unread inbox
+	}
+	recipients, err := h.resolveRecipients(ctx, rm)
+	if err != nil {
+		return
+	}
+	others := make([]int64, 0, len(recipients))
+	for _, uid := range recipients {
+		if uid != senderUID {
+			others = append(others, uid)
+		}
+	}
+	_ = h.rooms.BumpUnread(ctx, rm.ID, others)
+	_ = h.rooms.ResetUnread(ctx, senderUID, rm.ID)
 }
 
 func (h *Handler) recall(w http.ResponseWriter, r *http.Request) {

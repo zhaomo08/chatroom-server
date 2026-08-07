@@ -64,6 +64,10 @@ type fakeRoomStore struct {
 	members          map[int64][]room.Member
 	friends          map[int64]*room.Friend
 	listMembersCalls int
+	touchedRoomID    int64
+	touchedMsgID     int64
+	bumpedUIDs       []int64
+	resetUID         int64
 }
 
 func (f *fakeRoomStore) CreateGroupRoom(ctx context.Context, ownerUID int64, name, avatar string) (int64, error) {
@@ -107,6 +111,18 @@ func (f *fakeRoomStore) GetFriendByRoomID(ctx context.Context, roomID int64) (*r
 }
 func (f *fakeRoomStore) ListRoomsForUser(ctx context.Context, uid int64) ([]room.RoomSummary, error) {
 	return nil, nil
+}
+func (f *fakeRoomStore) TouchRoom(ctx context.Context, roomID, msgID int64) error {
+	f.touchedRoomID, f.touchedMsgID = roomID, msgID
+	return nil
+}
+func (f *fakeRoomStore) BumpUnread(ctx context.Context, roomID int64, recipientUIDs []int64) error {
+	f.bumpedUIDs = recipientUIDs
+	return nil
+}
+func (f *fakeRoomStore) ResetUnread(ctx context.Context, uid, roomID int64) error {
+	f.resetUID = uid
+	return nil
 }
 func (f *fakeRoomStore) GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64) (int64, error) {
 	return 0, nil
@@ -214,6 +230,68 @@ func TestSendMessageToGroupMembers(t *testing.T) {
 	}
 	if len(hub.sentTo[1]) != 1 || len(hub.sentTo[2]) != 1 {
 		t.Fatalf("expected both members to receive the broadcast, got sentTo = %+v", hub.sentTo)
+	}
+}
+
+func TestSendTracksRoomActivityAndUnread(t *testing.T) {
+	secret := []byte("test-secret")
+	msgStore := newFakeMsgStore()
+	roomStore := &fakeRoomStore{
+		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
+		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}, {GroupID: 10, UID: 2, Role: room.RoleMember}}},
+	}
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	token, _ := auth.GenerateToken(1, secret, time.Hour)
+	body, _ := json.Marshal(map[string]any{"room_id": 10, "content": "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if roomStore.touchedRoomID != 10 || roomStore.touchedMsgID != 1 {
+		t.Errorf("TouchRoom(roomID, msgID) = (%d, %d), want (10, 1)", roomStore.touchedRoomID, roomStore.touchedMsgID)
+	}
+	// uid 1 is the sender: they should not be in the bumped (unread++) list,
+	// and their own unread count should have been reset.
+	if len(roomStore.bumpedUIDs) != 1 || roomStore.bumpedUIDs[0] != 2 {
+		t.Errorf("bumpedUIDs = %v, want [2] (sender excluded)", roomStore.bumpedUIDs)
+	}
+	if roomStore.resetUID != 1 {
+		t.Errorf("resetUID = %d, want 1 (the sender)", roomStore.resetUID)
+	}
+}
+
+func TestRecallDoesNotTrackActivity(t *testing.T) {
+	secret := []byte("test-secret")
+	msgStore := newFakeMsgStore()
+	msgStore.msgs[1] = &Message{ID: 1, RoomID: 10, FromUID: 1, CreateTime: time.Now()}
+	roomStore := &fakeRoomStore{
+		rooms:   map[int64]*room.Room{10: {ID: 10, Type: room.TypeGroup}},
+		members: map[int64][]room.Member{10: {{GroupID: 10, UID: 1, Role: room.RoleOwner}}},
+	}
+	h := NewHandler(msgStore, roomStore, newFakeHub(), nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	wrapped := auth.Middleware(secret)(mux)
+
+	token, _ := auth.GenerateToken(1, secret, time.Hour)
+	req := httptest.NewRequest(http.MethodPut, "/api/messages/1/recall", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if roomStore.touchedRoomID != 0 || len(roomStore.bumpedUIDs) != 0 {
+		t.Error("recall should not touch room activity or bump unread counts")
 	}
 }
 

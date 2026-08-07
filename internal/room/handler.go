@@ -37,11 +37,34 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/rooms", h.listRooms)
 	mux.HandleFunc("POST /api/rooms/friends", h.createFriendRoom)
 	mux.HandleFunc("POST /api/rooms/groups", h.createGroup)
+	mux.HandleFunc("PUT /api/rooms/{roomID}/read", h.markRead)
 	mux.HandleFunc("POST /api/rooms/groups/{roomID}/members", h.addMember)
 	mux.HandleFunc("DELETE /api/rooms/groups/{roomID}/members/{uid}", h.removeMember)
 	mux.HandleFunc("DELETE /api/rooms/groups/{roomID}/members/me", h.exitGroup)
 	mux.HandleFunc("PUT /api/rooms/groups/{roomID}/admins/{uid}", h.setAdmin)
 	mux.HandleFunc("GET /api/rooms/groups/{roomID}/members", h.listMembers)
+}
+
+// markRead zeroes the caller's unread count for roomID (called when they
+// open/view the room). No membership check: resetting an unread counter
+// for a room you're not in is harmless housekeeping, not an access to
+// anything private.
+func (h *Handler) markRead(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UIDFromContext(r.Context())
+	roomID, err := strconv.ParseInt(r.PathValue("roomID"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid roomID")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	if err := h.store.ResetUnread(ctx, uid, roomID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark room as read")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h *Handler) listRooms(w http.ResponseWriter, r *http.Request) {

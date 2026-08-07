@@ -17,6 +17,7 @@ type fakeStore struct {
 	groups  map[int64]*Group
 	friends map[int64]*Friend
 	members map[int64]map[int64]Member // groupID -> uid -> Member
+	unread  map[int64]map[int64]int    // roomID -> uid -> unread count
 	nextID  int64
 }
 
@@ -26,7 +27,33 @@ func newFakeStore() *fakeStore {
 		groups:  map[int64]*Group{},
 		friends: map[int64]*Friend{},
 		members: map[int64]map[int64]Member{},
+		unread:  map[int64]map[int64]int{},
 	}
+}
+
+func (f *fakeStore) TouchRoom(ctx context.Context, roomID, msgID int64) error {
+	if r, ok := f.rooms[roomID]; ok {
+		r.LastMsgID = msgID
+	}
+	return nil
+}
+
+func (f *fakeStore) BumpUnread(ctx context.Context, roomID int64, recipientUIDs []int64) error {
+	if f.unread[roomID] == nil {
+		f.unread[roomID] = map[int64]int{}
+	}
+	for _, uid := range recipientUIDs {
+		f.unread[roomID][uid]++
+	}
+	return nil
+}
+
+func (f *fakeStore) ResetUnread(ctx context.Context, uid, roomID int64) error {
+	if f.unread[roomID] == nil {
+		f.unread[roomID] = map[int64]int{}
+	}
+	f.unread[roomID][uid] = 0
+	return nil
 }
 
 func (f *fakeStore) CreateGroupRoom(ctx context.Context, ownerUID int64, name, avatar string) (int64, error) {

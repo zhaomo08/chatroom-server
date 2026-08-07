@@ -60,6 +60,11 @@ func (f *fakeRoomStore) GetFriendByRoomID(ctx context.Context, roomID int64) (*r
 func (f *fakeRoomStore) ListRoomsForUser(ctx context.Context, uid int64) ([]room.RoomSummary, error) {
 	return nil, nil
 }
+func (f *fakeRoomStore) TouchRoom(ctx context.Context, roomID, msgID int64) error { return nil }
+func (f *fakeRoomStore) BumpUnread(ctx context.Context, roomID int64, recipientUIDs []int64) error {
+	return nil
+}
+func (f *fakeRoomStore) ResetUnread(ctx context.Context, uid, roomID int64) error { return nil }
 func (f *fakeRoomStore) GetOrCreateFriendRoom(ctx context.Context, uid1, uid2 int64) (int64, error) {
 	return 0, nil
 }
