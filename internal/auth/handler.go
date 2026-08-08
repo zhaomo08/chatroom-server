@@ -26,6 +26,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 // Mounted behind the Bearer-header middleware, unlike Register above.
 func (h *Handler) RegisterProtected(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/users/lookup", h.handleLookup)
+	mux.HandleFunc("PUT /api/users/me", h.handleUpdateProfile)
 }
 
 type registerRequest struct {
@@ -130,6 +131,51 @@ func (h *Handler) handleLookup(w http.ResponseWriter, r *http.Request) {
 		out[i] = userInfo{UID: u.ID, Nickname: u.Nickname, Avatar: u.Avatar}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type updateProfileRequest struct {
+	Nickname *string `json:"nickname"`
+	Avatar   *string `json:"avatar"`
+}
+
+// handleUpdateProfile supports partial updates (nickname-only or
+// avatar-only) by reading the caller's current row and only overwriting the
+// fields present in the request, rather than requiring the client to
+// resend both every time.
+func (h *Handler) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	uid, _ := UIDFromContext(r.Context())
+
+	var req updateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Nickname != nil && (len(*req.Nickname) == 0 || len(*req.Nickname) > 32) {
+		writeError(w, http.StatusBadRequest, "nickname must be 1-32 characters")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	current, err := h.store.GetUsersByIDs(ctx, []int64{uid})
+	if err != nil || len(current) == 0 {
+		writeError(w, http.StatusInternalServerError, "failed to load current profile")
+		return
+	}
+	nickname, avatar := current[0].Nickname, current[0].Avatar
+	if req.Nickname != nil {
+		nickname = *req.Nickname
+	}
+	if req.Avatar != nil {
+		avatar = *req.Avatar
+	}
+
+	if err := h.store.UpdateProfile(ctx, uid, nickname, avatar); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update profile")
+		return
+	}
+	writeJSON(w, http.StatusOK, userInfo{UID: uid, Nickname: nickname, Avatar: avatar})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

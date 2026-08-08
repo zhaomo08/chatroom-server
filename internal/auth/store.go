@@ -20,6 +20,7 @@ type Store interface {
 	CreateUser(ctx context.Context, username, passwordHash, nickname string) (int64, error)
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUsersByIDs(ctx context.Context, ids []int64) ([]User, error)
+	UpdateProfile(ctx context.Context, uid int64, nickname, avatar string) error
 }
 
 type SQLStore struct{ db *sqlx.DB }
@@ -62,4 +63,10 @@ func (s *SQLStore) GetUsersByIDs(ctx context.Context, ids []int64) ([]User, erro
 		return nil, err
 	}
 	return users, nil
+}
+
+func (s *SQLStore) UpdateProfile(ctx context.Context, uid int64, nickname, avatar string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE user SET nickname = ?, avatar = ? WHERE id = ?`, nickname, avatar, uid)
+	return err
 }

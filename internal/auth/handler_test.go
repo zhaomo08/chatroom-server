@@ -49,6 +49,16 @@ func (f *fakeStore) GetUserByUsername(ctx context.Context, username string) (*Us
 	return u, nil
 }
 
+func (f *fakeStore) UpdateProfile(ctx context.Context, uid int64, nickname, avatar string) error {
+	for _, u := range f.users {
+		if u.ID == uid {
+			u.Nickname, u.Avatar = nickname, avatar
+			return nil
+		}
+	}
+	return sql.ErrNoRows
+}
+
 func TestHandlerRegisterAndLogin(t *testing.T) {
 	h := NewHandler(newFakeStore(), []byte("test-secret"), time.Hour)
 	mux := http.NewServeMux()
@@ -133,6 +143,60 @@ func TestHandlerLookupRejectsEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/users/lookup", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandlerUpdateProfilePartial(t *testing.T) {
+	secret := []byte("test-secret")
+	store := newFakeStore()
+	store.users["alice"] = &User{ID: 1, Username: "alice", Nickname: "Alice", Avatar: "old.png"}
+	h := NewHandler(store, secret, time.Hour)
+	mux := http.NewServeMux()
+	h.RegisterProtected(mux)
+	wrapped := Middleware(secret)(mux)
+
+	token, _ := GenerateToken(1, secret, time.Hour)
+
+	// Nickname-only update must leave the existing avatar untouched.
+	body, _ := json.Marshal(map[string]any{"nickname": "Alicia"})
+	req := httptest.NewRequest(http.MethodPut, "/api/users/me", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp userInfo
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Nickname != "Alicia" || resp.Avatar != "old.png" {
+		t.Errorf("resp = %+v, want nickname=Alicia avatar=old.png", resp)
+	}
+	if store.users["alice"].Nickname != "Alicia" || store.users["alice"].Avatar != "old.png" {
+		t.Errorf("stored user = %+v, want nickname=Alicia avatar=old.png", store.users["alice"])
+	}
+}
+
+func TestHandlerUpdateProfileRejectsEmptyNickname(t *testing.T) {
+	secret := []byte("test-secret")
+	store := newFakeStore()
+	store.users["alice"] = &User{ID: 1, Username: "alice", Nickname: "Alice"}
+	h := NewHandler(store, secret, time.Hour)
+	mux := http.NewServeMux()
+	h.RegisterProtected(mux)
+	wrapped := Middleware(secret)(mux)
+
+	token, _ := GenerateToken(1, secret, time.Hour)
+	body, _ := json.Marshal(map[string]any{"nickname": ""})
+	req := httptest.NewRequest(http.MethodPut, "/api/users/me", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)

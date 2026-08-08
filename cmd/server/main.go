@@ -82,6 +82,7 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	mux.Handle("POST /api/calls/token", authMiddleware(protected))
 	mux.Handle("POST /api/calls/invite", authMiddleware(protected))
 	mux.Handle("POST /api/users/lookup", authMiddleware(protected))
+	mux.Handle("PUT /api/users/me", authMiddleware(protected))
 
 	return mux
 }
