@@ -1,6 +1,8 @@
 # chatroom-server
 
-从 MallChat 抽取的群聊房间服务，Go 实现。群聊 + 单聊(私聊) + 热门群广播，消息类型：文本/表情/撤回/系统。
+从 [MallChat](https://github.com/zongzibinbin/MallChat) 抽取的群聊房间服务，Go 实现。群聊 + 单聊(私聊) + 热门群广播，消息类型：文本/表情/撤回/系统，另含语音视频通话(LiveKit)、图片/视频消息(MinIO)。
+
+配套前端：[chatroom-web](https://github.com/zhaomo08/chatroom-web)
 
 ## 本地运行
 
